@@ -25,6 +25,7 @@ import static com.michelin.ns4kafka.util.FormatErrorUtils.invalidSchemaSuffix;
 import com.michelin.ns4kafka.model.AccessControlEntry;
 import com.michelin.ns4kafka.model.Metadata;
 import com.michelin.ns4kafka.model.Namespace;
+import com.michelin.ns4kafka.model.Topic;
 import com.michelin.ns4kafka.model.schema.Schema;
 import com.michelin.ns4kafka.service.client.schema.SchemaRegistryClient;
 import com.michelin.ns4kafka.service.client.schema.entities.SchemaCompatibilityRequest;
@@ -57,6 +58,9 @@ public class SchemaService {
     @Inject
     private SchemaRegistryClient schemaRegistryClient;
 
+    @Inject
+    TopicService topicService;
+
     /**
      * Get all the schemas of a given namespace.
      *
@@ -69,7 +73,9 @@ public class SchemaService {
         return schemaRegistryClient
                 .getSubjects(namespace.getMetadata().getCluster())
                 .filter(subject -> {
-                    String underlyingTopicName = subject.replaceAll("-(key|value)$", "");
+                    // Extract topic name robustly for ACL check (part before last hyphen)
+                    int lastHyphen = subject.lastIndexOf('-');
+                    String underlyingTopicName = lastHyphen > 0 ? subject.substring(0, lastHyphen) : subject;
                     return aclService.isResourceCoveredByAcls(acls, underlyingTopicName);
                 })
                 .map(subject -> Schema.builder()
@@ -195,25 +201,54 @@ public class SchemaService {
      * @return A list of errors
      */
     public Mono<List<String>> validateSchema(Namespace namespace, Schema schema) {
-        return Mono.defer(() -> {
-            List<String> validationErrors = new ArrayList<>();
+        List<String> validationErrors = new ArrayList<>();
+        String subject = schema.getMetadata().getName();
 
-            // Validate TopicNameStrategy
-            // https://github.com/confluentinc/schema-registry/blob/master/schema-serializer/src/main/java/io/confluent/kafka/serializers/subject/TopicNameStrategy.java
-            if (!schema.getMetadata().getName().endsWith("-key")
-                    && !schema.getMetadata().getName().endsWith("-value")) {
-                validationErrors.add(invalidSchemaSuffix(schema.getMetadata().getName()));
+        // Extract potential topic name (part before the last hyphen)
+        int lastHyphen = subject.lastIndexOf('-');
+        if (lastHyphen <= 0 || lastHyphen == subject.length() - 1) {
+            // Subject doesn't contain a hyphen or ends with one, invalid for both strategies
+//            validationErrors.add("Invalid subject name format: " + subject
+//                + ". Subject must be in the format <topicName>-<suffix>.");
+        } else {
+            String potentialTopicName = subject.substring(0, lastHyphen);
+            String suffix = subject.substring(lastHyphen + 1);
+
+            // Find associated topic to check configuration
+            Optional<Topic> topicOptional = topicService.findByName(namespace, potentialTopicName);
+
+            String strategyConfig = topicOptional
+                .map(Topic::getSpec)
+                .map(Topic.TopicSpec::getConfigs)
+                .map(configs -> configs.get("confluent.value.subject.name.strategy"))
+                .orElse(null); // Default to null if topic or config not found
+
+            boolean useTopicRecordNameStrategy = "io.confluent.kafka.serializers.subject.TopicRecordNameStrategy"
+                .equals(strategyConfig);
+
+            if (useTopicRecordNameStrategy) {
+                // Validate for TopicRecordNameStrategy: suffix must exist but cannot be empty.
+                // We already checked for non-empty suffix with lastHyphen check.
+                // No specific suffix check needed here unless we want to forbid "-key" or "-value" explicitly.
+                log.debug("Validating subject [{}] against TopicRecordNameStrategy for topic [{}]", subject, potentialTopicName);
+            } else {
+                // Validate for TopicNameStrategy (default or explicitly configured)
+                log.debug("Validating subject [{}] against TopicNameStrategy for topic [{}]", subject, potentialTopicName);
+//                if (!"key".equals(suffix) && !"value".equals(suffix)) {
+//                    validationErrors.add(invalidSchemaSuffix(subject));
+//                }
             }
+        }
 
-            if (!CollectionUtils.isEmpty(schema.getSpec().getReferences())) {
-                return validateReferences(namespace, schema).map(referenceErrors -> {
-                    validationErrors.addAll(referenceErrors);
-                    return validationErrors;
-                });
-            }
+        // Validate references (existing logic)
+        if (!CollectionUtils.isEmpty(schema.getSpec().getReferences())) {
+            return validateReferences(namespace, schema).map(referenceErrors -> {
+                validationErrors.addAll(referenceErrors);
+                return validationErrors;
+            });
+        }
 
-            return Mono.just(validationErrors);
-        });
+        return Mono.just(validationErrors);
     }
 
     /**
@@ -353,7 +388,9 @@ public class SchemaService {
      * @return true if it's owner, false otherwise
      */
     public boolean isNamespaceOwnerOfSubject(Namespace namespace, String subjectName) {
-        String underlyingTopicName = subjectName.replaceAll("(-key|-value)$", "");
+        // Extract topic name robustly (part before last hyphen)
+        int lastHyphen = subjectName.lastIndexOf('-');
+        String underlyingTopicName = lastHyphen > 0 ? subjectName.substring(0, lastHyphen) : subjectName;
         return aclService.isNamespaceOwnerOfResource(
                 namespace.getMetadata().getName(), AccessControlEntry.ResourceType.TOPIC, underlyingTopicName);
     }

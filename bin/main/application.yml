@@ -1,0 +1,134 @@
+endpoints:
+  beans:
+    enabled: false
+  env:
+    enabled: false
+  info:
+    enabled: false
+  loggers:
+    enabled: false
+  metrics:
+    enabled: false
+  refresh:
+    enabled: false
+  routes:
+    enabled: false
+  threaddump:
+    enabled: false
+jackson:
+  serialization:
+    indent-output: true
+  serialization-inclusion: 'NON_ABSENT'
+kafka:
+  bootstrap.servers: 'localhost:9092'
+#  sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="admin" password="admin";'
+#  sasl.mechanism: 'SCRAM-SHA-512'
+#  security.protocol: 'SASL_PLAINTEXT'
+  consumers:
+    default:
+      session.timeout.ms: 30000
+  health:
+    enabled: false
+  producers:
+    default:
+      acks: 'all'
+      delivery.timeout.ms: 10000
+      request.timeout.ms: 10000
+      retries: 1
+micronaut:
+  application:
+    name: 'ns4kafka'
+  codec:
+    json:
+      additional-types:
+        - 'application/vnd.schemaregistry.v1+json'
+  http:
+    services:
+      kafka-connect:
+        event-loop-group: 'connect'
+      schema-registry:
+        event-loop-group: 'schema'
+  netty:
+    event-loops:
+      connect:
+        num-threads: 4
+        prefer-native-transport: true
+      default:
+        num-threads: 8
+      schema:
+        num-threads: 4
+        prefer-native-transport: true
+  router:
+    static-resources:
+      rapidoc:
+        mapping: '/rapidoc/**'
+        paths: 'classpath:META-INF/swagger/views/rapidoc'
+      swagger:
+        mapping: '/swagger/**'
+        paths: 'classpath:META-INF/swagger'
+  security:
+    authentication: 'bearer'
+    enabled: true
+    endpoints:
+      introspection:
+        enabled: true
+    gitlab:
+      enabled: true
+      url: 'https://gitlab.com'
+    intercept-url-map:
+      - access:
+          - 'isAnonymous()'
+        http-method: 'GET'
+        pattern: '/rapidoc/**'
+      - access:
+          - 'isAnonymous()'
+        http-method: 'GET'
+        pattern: '/swagger/**'
+    ldap:
+      enabled: false
+    token:
+      jwt:
+        signatures:
+          secret:
+            generator:
+              secret: '"${JWT_GENERATOR_SIGNATURE_SECRET:pleaseChangeThisSecretForANewOne}"'
+ns4kafka:
+  managed-clusters:
+    local:
+      config:
+        bootstrap.servers: 'localhost:9092'
+#        sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="admin" password="admin";'
+#        sasl.mechanism: 'SCRAM-SHA-512'
+#        security.protocol: 'SASL_PLAINTEXT'
+      connects:
+        local:
+          url: 'http://localhost:8083'
+      drop-unsync-acls: true
+      manage-acls: true
+      manage-connectors: true
+      manage-topics: true
+      manage-users: true
+      provider: 'SELF_MANAGED'
+      schema-registry:
+        url: 'http://localhost:8081'
+  security:
+    admin-group: 'ns4kafka'
+    local-users:
+      - groups:
+          - 'ns4kafka'
+        password: '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918'
+        username: 'gitlab'
+  store:
+    kafka:
+      enabled: true
+      group-id: 'ns4kafka.group'
+      init-timeout: 60000
+      topics:
+        prefix: 'ns4kafka'
+        props:
+          cleanup.policy: 'compact'
+          max.compaction.lag.ms: '604800000'
+          min.compaction.lag.ms: '0'
+          min.insync.replicas: 1
+          segment.ms: '600000'
+        replication-factor: 1
